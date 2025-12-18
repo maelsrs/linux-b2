@@ -34,5 +34,5 @@ if [ ! -z "$DATE_DIFF" ]; then
     tar --extract --gzip --file=backup-diff-$DATE_DIFF.tar.gz --directory=$RESTORE_LOCATION
 fi
 
-echo "✅ Restauration terminée. Vérifie tes fichiers."
+echo "✅ Restauration terminée."
 rm -rf /tmp/restore_work

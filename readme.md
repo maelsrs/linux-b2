@@ -10,4 +10,4 @@
 
 <!-- | **VM-VPN** | DMZ (VLAN 20) | `10.5.2.200` | • WireGuard (Point d'entrée unique)<br>• Accès SSH sécurisé | -->
 
-"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" modifyvm "b2-main" --nic5 hostonly --hostonlyadapter5 "VirtualBox Host-Only Ethernet Adapter #5"
+<!-- "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" modifyvm "b2-main" --nic5 hostonly --hostonlyadapter5 "VirtualBox Host-Only Ethernet Adapter #5" -->
