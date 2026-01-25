@@ -1,0 +1,19 @@
+groups:
+  - name: test_alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes) * 100 > 50
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mémoire élevée"
+          description: "Utilisation mémoire à {{ $value }}%"
+
+      - alert: InstanceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Instance down"

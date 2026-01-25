@@ -46,8 +46,12 @@ sudo docker run -d --restart=always -p 3001:3001 -v uptime-kuma:/app/data --name
 mkdir root/ansible
 sudo apt install ansible
 sudo bash -c "cat > /root/ansible/inventory.ini" <<EOF
-[servers]
-web ansible_host=10.5.2.10 ansible_user=mael
+[webservers]
+web ansible_host=10.5.2.10 ansible_user=root
+
+[other]
+router ansible_host=10.5.1.2 ansible_user=root
+database ansible_host=10.5.1.20 ansible_user=root
 EOF
 sudo ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N ""
 sudo ssh-copy-id -i /root/.ssh/id_ed25519.pub mael@10.5.2.10
@@ -163,3 +167,175 @@ EOF
 
 ansible-playbook -i inventory.ini webserver.yml
 
+mkdir -p /root/supervision
+cd /root/supervision
+
+sudo bash -c "cat > /root/supervision/prometheus.yml" <<'PROM_EOF'
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          nodename: 'mgmt'
+      - targets: ['10.5.2.10:9100']
+        labels:
+          nodename: 'app'
+      - targets: ['10.5.1.2:9100']
+        labels:
+          nodename: 'router'
+rule_files:
+  - "alert.rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+PROM_EOF
+
+sudo bash -c "cat > /root/supervision/alert.rules.yml" <<'ALERT_EOF'
+groups:
+  - name: test_alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes) * 100 > 50
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mémoire élevée"
+          description: "Utilisation mémoire à {{ $value }}%"
+
+      - alert: InstanceDown
+        expr: up == 0
+        for: 5s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Instance down"
+ALERT_EOF
+
+sudo bash -c "cat > /root/supervision/alertmanager.yml" <<'ALERTM_EOF'
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'nodename']
+  group_wait: 3s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'discord_webhook'
+
+receivers:
+  - name: 'discord_webhook'
+    webhook_configs:
+      - url: 'http://alertmanager-discord:9094'
+        send_resolved: true
+ALERTM_EOF
+
+sudo bash -c "cat > /root/supervision/docker-compose.yml" <<'DOCKER_EOF'
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./alert.rules.yml:/etc/prometheus/alert.rules.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter
+    ports:
+      - "9100:9100"
+    pid: host
+    volumes:
+      - /:/host:ro
+    command:
+      - '--path.rootfs=/host'
+
+  alertmanager:
+    image: prom/alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+
+  alertmanager-discord:
+    image: benjojo/alertmanager-discord
+    ports:
+      - "9094:9094"
+    environment:
+      - DISCORD_WEBHOOK=https://discord.com/api/webhooks/1465010726530711827/2RG6ntpPbza9vaW4LW9eoyKfjI2D2j9qQ919Hy0Cqv3sf0TeFePSBHQcOUf4KJPoez8-
+DOCKER_EOF
+
+cd /root/supervision
+docker-compose up -d
+
+export ANSIBLE_HOST_KEY_CHECKING=False
+sudo bash -c "cat > /root/ansible/install-node-exporter.yml" <<'NODEEXP_EOF'
+---
+- name: Installation de Node Exporter (Docker) sur tous les hosts
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Mettre à jour le cache APT
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Installer Docker et les dépendances Python pour Ansible
+      apt:
+        name:
+          - docker.io
+          - python3-docker  # INDISPENSABLE pour utiliser le module docker_container
+          - python3-pip
+        state: present
+
+    - name: S'assurer que le service Docker est démarré et activé
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Créer le dossier node-exporter (optionnel mais propre)
+      file:
+        path: /opt/node-exporter
+        state: directory
+        mode: '0755'
+
+    - name: Lancer le conteneur node-exporter
+      docker_container:
+        name: node-exporter
+        image: quay.io/prometheus/node-exporter:latest
+        state: started
+        restart_policy: always
+        ports:
+          - "9100:9100"
+        pid_mode: host
+        volumes:
+          - /:/host:ro,rslave
+        command: 
+          - '--path.rootfs=/host'
+NODEEXP_EOF
+
+cd /root/ansible
+ansible-playbook -i inventory.ini install-node-exporter.yml
